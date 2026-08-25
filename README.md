@@ -49,5 +49,14 @@ streamlit run app.py
 - **Severe Interaction**: Ciprofloxacin for a patient on Warfarin. AI flags as HIGH RISK (major bleeding risk).
 - **Contraindication**: Lisinopril for a pregnant patient. AI flags as HIGH RISK (Category D).
 
+## Engineering Decisions & Challenges Solved
+
+| Challenge | Decision | Why |
+|---|---|---|
+| LLM output isn't always valid JSON | Robust extraction (regex for fenced/embedded JSON) with a **fail-safe fallback**: unparseable output returns `risk_level: HIGH, is_safe_to_dispense: false` and routes to manual review | In a safety system, a parse failure means the safety check *did not complete* — the only acceptable default is human review, never "assume safe" |
+| LLM-extracted drug names can be hallucinated or misspelled | Every extracted drug is cross-checked against the local `DRUG_NAME_INDEX`; drugs not found are explicitly marked UNVERIFIED in the prompt context | The model must distinguish verified knowledge-base entries from names it merely invented |
+| Two LLM calls per verification rebuilt clients each time | Gemini client and ChromaDB collection cached as module-level singletons | Client construction is setup cost; caching cut avoidable latency on every verification |
+| AI advice must never auto-dispense | Human-in-the-loop by design: every decision is logged with pharmacist ID via the audit log before action | Regulatory alignment — the pharmacist is the decision-maker, the system is a second pair of eyes |
+
 ## ⚠️ Medical Disclaimer
 **FOR EDUCATIONAL PURPOSES ONLY.** This system is a proof-of-concept AI assistant. It does not replace the professional judgment of a licensed pharmacist or physician. Not for actual clinical use.

@@ -15,9 +15,19 @@ from src.knowledge.drug_database import DRUG_NAME_INDEX
 
 CHROMA_PATH = os.getenv("CHROMA_DB_PATH", "./data/chroma_db")
 
+# Cached singletons — client construction is setup cost, not per-request work.
+# Each verify_prescription() makes two LLM calls; recreating clients per call
+# added avoidable latency to every verification.
+_cached_llm = None
+_cached_collection = None
+
 
 def _get_llm():
-    return ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", temperature=0.1)
+    """Reuse one Gemini client across verifications."""
+    global _cached_llm
+    if _cached_llm is None:
+        _cached_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", temperature=0.1)
+    return _cached_llm
 
 
 def extract_drugs_from_text(prescription_text: str) -> List[str]:
@@ -44,23 +54,37 @@ def retrieve_drug_knowledge(drugs: List[str], patient_info: str = "") -> str:
         return "No known drugs identified."
 
     try:
-        client = chromadb.PersistentClient(path=CHROMA_PATH)
-        collection = client.get_collection(
-            name="drug_knowledge",
-            embedding_function=DefaultEmbeddingFunction()
-        )
+        global _cached_collection
+        if _cached_collection is None:
+            client = chromadb.PersistentClient(path=CHROMA_PATH)
+            _cached_collection = client.get_collection(
+                name="drug_knowledge",
+                embedding_function=DefaultEmbeddingFunction()
+            )
+        collection = _cached_collection
     except Exception as e:
         print(f"Warning: ChromaDB not found or error. Run build_drug_database.py. Error: {e}")
         return "Knowledge base unavailable."
 
     knowledge_chunks = []
     
-    # 1. Fetch exact matches from local index if available (for exact info)
+    # 1. Fetch exact matches from local index; explicitly mark drugs that are
+    # NOT in the index so the model treats them as unverified rather than
+    # silently trusting an LLM-hallucinated drug name.
+    unverified_drugs = []
     for drug in drugs:
         drug_lower = drug.lower()
         if drug_lower in DRUG_NAME_INDEX:
             db_drug = DRUG_NAME_INDEX[drug_lower]
             knowledge_chunks.append(f"EXACT MATCH [{db_drug['name']}]: {db_drug['knowledge_text']}")
+        else:
+            unverified_drugs.append(drug)
+    if unverified_drugs:
+        knowledge_chunks.append(
+            f"WARNING: The following identified drugs were NOT found in the local "
+            f"drug index: {', '.join(unverified_drugs)}. Treat any analysis of them "
+            f"as UNVERIFIED and recommend pharmacist confirmation."
+        )
 
     # 2. Use RAG for interactions and general safety (especially involving patient context)
     query_texts = drugs.copy()
@@ -128,7 +152,10 @@ Return ONLY valid JSON in this exact format:
 
     response = llm.invoke(prompt).content.strip()
     
-    # Robust JSON extraction
+    # Robust JSON extraction — extraction regex handles markdown fences and
+    # surrounding prose. On failure we FAIL SAFE: unparsed output means the
+    # safety check did not complete, so the prescription must be reviewed by
+    # a human rather than assumed safe.
     try:
         match = re.search(r"\{.*\}", response, re.DOTALL)
         if match:
