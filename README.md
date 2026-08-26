@@ -1,7 +1,9 @@
 # Prescription Verification System (RAG + Human-in-Loop)
 
 ## 🎯 Problem Statement
-UAE pharmacies process thousands of prescriptions daily. Checking for drug interactions, patient contraindications (pregnancy, allergies, age), and correct dosages is time-consuming and prone to human error. This system uses **Retrieval-Augmented Generation (RAG)** combined with a **Human-in-the-Loop** workflow to catch life-threatening errors before dispensing.
+UAE pharmacies process thousands of prescriptions daily. Checking for drug interactions, patient contraindications (pregnancy, allergies, age), and correct dosages is time-consuming and prone to human error — a pharmacist checking a prescription has 15-30 seconds before the next customer, yet must cross-reference multiple drug databases. Existing clinical decision support systems (Epocrates, Medscape) focus on drug information lookup, not end-to-end prescription verification with structured risk assessment.
+
+I built a RAG pipeline that retrieves drug safety information from a local ChromaDB knowledge base, then uses an LLM to analyze the prescription against patient context. The system was designed with a fail-safe: if the LLM output cannot be parsed as valid JSON, the system defaults to HIGH risk and recommends manual review — an unparsed safety check means the verification didn't complete, and the only safe assumption is to escalate. Drug names extracted by the LLM are cross-checked against a local drug index; unknown names are explicitly flagged as UNVERIFIED in the prompt context, preventing the model from treating hallucinated drug names as trusted knowledge. The audit log tracks every verification with pharmacist ID, creating a traceable trail for regulatory compliance.
 
 ## 🏗️ Architecture
 
